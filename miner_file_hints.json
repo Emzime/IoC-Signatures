@@ -10,7 +10,6 @@
     "phoenixminer(\\.exe)?$",
     "astrominer(\\.exe)?$",
     "cpuminer(\\.exe)?$",
-    "minerd(\\.exe)?$",
-    "__test__fake_miner(\\.exe)?$"
+    "minerd(\\.exe)?$"
   ]
 }
