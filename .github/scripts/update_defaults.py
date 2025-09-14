@@ -1,4 +1,3 @@
-# .github/scripts/update_defaults.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -72,11 +71,15 @@ def replace_between_marks(src: str, begin: str, end: str, payload: str) -> tuple
     """
     Remplace le contenu entre deux marqueurs *sur une seule occurrence*.
     Les marqueurs eux-mêmes sont conservés.
+    Utilise un replacer callable pour éviter l'interprétation des backslashes
+    dans le payload (sinon \s, \b, etc. cassent la substitution).
     """
     pat = re.compile(rf"({re.escape(begin)})(.*?)[ \t]*({re.escape(end)})", re.DOTALL)
-    # Ajoute des newlines de part et d’autre pour éviter le collage sur la même ligne
-    replacement = r"\1\n" + payload + r"\n\3"
-    new_src, n = pat.subn(replacement, src, count=1)
+
+    def replacer(m: re.Match) -> str:
+        return m.group(1) + "\n" + payload + "\n" + m.group(3)
+
+    new_src, n = pat.subn(replacer, src, count=1)
     return new_src, bool(n)
 
 
