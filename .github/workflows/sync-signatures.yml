@@ -1,4 +1,3 @@
-# .GitHub/workflows/sync_signatures.yml
 name: Sync signatures to IoC-Scanner
 
 on:
@@ -35,7 +34,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
 
       - name: Verify tools (jq, curl, git)
         run: |
@@ -52,7 +51,16 @@ jobs:
 
       - name: Run update_defaults.py (mise à jour des DEFAULT_*)
         run: |
+          set +e
           python .github/scripts/update_defaults.py "${TARGET_REPO}"
+          code=$?
+          set -e
+          if [ $code -eq 2 ]; then
+            echo "Changes detected (OK)."
+          elif [ $code -ne 0 ]; then
+            echo "Script failed with exit code $code"
+            exit $code
+          fi
 
       - name: Create commit if changes
         run: |
@@ -104,4 +112,3 @@ jobs:
               echo "No PR created or found."
             fi
           fi
-
