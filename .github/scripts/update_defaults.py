@@ -49,17 +49,15 @@ def replace_first(src: str, patterns: Iterable[str], replacement: str) -> Tuple[
     return src, False, ""
 
 
-def replace_between_marks(src: str, begin: str, end: str, payload: str) -> Tuple[str, bool]:
+def replace_between_marks(src: str, begin: str, end: str, payload: str) -> tuple[str, bool]:
     """
     Remplace le contenu entre deux marqueurs *sur une seule occurrence*.
     Les marqueurs eux-mêmes sont conservés.
     """
-    pattern = re.compile(
-        rf"({re.escape(begin)})(.*?)[ \t]*({re.escape(end)})",
-        re.DOTALL
-    )
-    replacement = r"\1" + payload + r"\3"
-    new_src, n = pattern.subn(replacement, src, count=1)
+    pat = re.compile(rf"({re.escape(begin)})(.*?)[ \t]*({re.escape(end)})", re.DOTALL)
+    # Ajoute des newlines de part et d’autre pour éviter le collage
+    replacement = r"\1\n" + payload + r"\n\3"
+    new_src, n = pat.subn(replacement, src, count=1)
     return new_src, bool(n)
 
 
