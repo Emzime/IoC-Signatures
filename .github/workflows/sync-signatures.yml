@@ -9,18 +9,14 @@ permissions:
   contents: write
   pull-requests: write
 
-concurrency:
-  group: sync-signatures-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   update-scanner:
     runs-on: ubuntu-latest
 
     env:
-      TARGET_OWNER: Emzime               # ← modifie si besoin
-      TARGET_REPO: IoC-Scanner           # ← modifie si besoin
-      TARGET_DEFAULT_BRANCH: main        # ← modifie si besoin
+      TARGET_OWNER: Emzime
+      TARGET_REPO: IoC-Scanner
+      TARGET_DEFAULT_BRANCH: main
       SYNC_BRANCH: update-defaults
       GIT_AUTHOR_NAME: github-actions[bot]
       GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
@@ -31,25 +27,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Verify tools (jq, curl, git)
-        run: |
-          jq --version
-          curl --version
-          git --version
-
       - name: Clone IoC-Scanner (target)
         run: |
           git clone "https://x-access-token:${{ secrets.SCANNER_PAT }}@github.com/${TARGET_OWNER}/${TARGET_REPO}.git"
-          echo "::group::Tree of ${TARGET_REPO}"
-          ls -la "${TARGET_REPO}" || true
-          echo "::endgroup::"
 
-      - name: Run update_defaults.py (mise à jour des DEFAULT_*)
+      - name: Run update_defaults.py
         run: |
           set +e
           python .github/scripts/update_defaults.py "${TARGET_REPO}"
@@ -62,39 +49,73 @@ jobs:
             exit $code
           fi
 
-      - name: Create commit if changes
+      - name: Bump version.txt (patch +1)
+        run: |
+          cd "${TARGET_REPO}"
+          VERSION_FILE="version.txt"
+
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "0.0.0" > "$VERSION_FILE"
+          fi
+
+          OLD_VERSION=$(head -n1 "$VERSION_FILE" | tr -d '\r' | xargs)
+          MAJOR=$(echo "$OLD_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$OLD_VERSION" | cut -d. -f2)
+          PATCH=$(echo "$OLD_VERSION" | cut -d. -f3)
+
+          if [ -z "$MAJOR" ] || [ -z "$MINOR" ] || [ -z "$PATCH" ]; then
+            NEW_VERSION="0.0.1"
+          else
+            PATCH=$((PATCH+1))
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          fi
+
+          echo "$NEW_VERSION" > "$VERSION_FILE"
+          echo "Bumped version: $OLD_VERSION → $NEW_VERSION"
+
+      - name: Commit & Push changes
         run: |
           cd "${TARGET_REPO}"
           git config user.name  "${GIT_AUTHOR_NAME}"
           git config user.email "${GIT_AUTHOR_EMAIL}"
           git checkout -B "${SYNC_BRANCH}"
-          # ajoute les fichiers susceptibles d'être modifiés par le script
-          git add scanner/refs/*.py || true
+
+          git add scanner/refs/*.py version.txt || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
             echo "NO_CHANGES=1" >> $GITHUB_ENV
             exit 0
           fi
-          git commit -m "chore: update DEFAULT_* from IoC-Signatures"
-          # IMPORTANT : forcer l'usage du PAT sur le remote origin
+
+          git commit -m "chore: update DEFAULT_* + bump version"
           git remote set-url origin "https://x-access-token:${{ secrets.SCANNER_PAT }}@github.com/${TARGET_OWNER}/${TARGET_REPO}.git"
-          echo "::group::git remote -v"
-          git remote -v
-          echo "::endgroup::"
           git push -f origin "${SYNC_BRANCH}"
 
       - name: Create or update Pull Request
         if: env.NO_CHANGES != '1'
         run: |
-          create_payload=$(jq -n             --arg title "Update DEFAULT_* signatures"             --arg head "${SYNC_BRANCH}"             --arg base "${TARGET_DEFAULT_BRANCH}"             --arg body "Mise à jour automatique des valeurs par défaut depuis IoC-Signatures."             '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true, draft:false}')
-          # tente de créer la PR (si elle existe déjà, on récupère l'URL existante)
-          resp=$(curl -sS -X POST             -H "Authorization: token ${{ secrets.SCANNER_PAT }}"             -H "Accept: application/vnd.github+json"             -d "$create_payload"             "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls")
+          create_payload=$(jq -n \
+            --arg title "Update DEFAULT_* signatures + bump version" \
+            --arg head "${SYNC_BRANCH}" \
+            --arg base "${TARGET_DEFAULT_BRANCH}" \
+            --arg body "Mise à jour automatique des valeurs par défaut depuis IoC-Signatures + incrément version." \
+            '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true, draft:false}')
+
+          resp=$(curl -sS -X POST \
+            -H "Authorization: token ${{ secrets.SCANNER_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$create_payload" \
+            "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls")
+
           url=$(echo "$resp" | jq -r '.html_url // empty')
           if [ -n "$url" ]; then
             echo "PR created: $url"
           else
-            # Récupère l’URL d’une PR ouverte depuis la même branche si elle existe déjà
-            list=$(curl -sS               -H "Authorization: token ${{ secrets.SCANNER_PAT }}"               -H "Accept: application/vnd.github+json"               "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls?head=${TARGET_OWNER}:${SYNC_BRANCH}&state=open")
+            list=$(curl -sS \
+              -H "Authorization: token ${{ secrets.SCANNER_PAT }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls?head=${TARGET_OWNER}:${SYNC_BRANCH}&state=open")
+
             existing=$(echo "$list" | jq -r '.[0].html_url // empty')
             if [ -n "$existing" ]; then
               echo "PR already exists: $existing"
