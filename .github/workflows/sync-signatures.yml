@@ -35,8 +35,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          cache: "pip"
+          python-version: "3.13"
 
       - name: Verify tools (jq, curl, git)
         run: |
@@ -74,15 +73,30 @@ jobs:
       - name: Create or update Pull Request
         if: env.NO_CHANGES != '1'
         run: |
-          create_payload=$(jq -n             --arg title  "Update DEFAULT_* signatures"             --arg head   "${SYNC_BRANCH}"             --arg base   "${TARGET_DEFAULT_BRANCH}"             --arg body   "Mise à jour automatique des valeurs par défaut depuis IoC-Signatures."             '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true, draft:false}')
+          create_payload=$(jq -n \
+            --arg title "Update DEFAULT_* signatures" \
+            --arg head "${SYNC_BRANCH}" \
+            --arg base "${TARGET_DEFAULT_BRANCH}" \
+            --arg body "Mise à jour automatique des valeurs par défaut depuis IoC-Signatures." \
+            '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true, draft:false}')
+
           # tente de créer la PR (si elle existe déjà, on récupère l'URL existante)
-          resp=$(curl -sS -X POST             -H "Authorization: token ${{ secrets.SCANNER_PAT }}"             -H "Accept: application/vnd.github+json"             -d "$create_payload"             "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls")
+          resp=$(curl -sS -X POST \
+            -H "Authorization: token ${{ secrets.SCANNER_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$create_payload" \
+            "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls")
+
           url=$(echo "$resp" | jq -r '.html_url // empty')
           if [ -n "$url" ]; then
             echo "PR created: $url"
           else
             # Récupère l’URL d’une PR ouverte depuis la même branche si elle existe déjà
-            list=$(curl -sS -H "Authorization: token ${{ secrets.SCANNER_PAT }}"               -H "Accept: application/vnd.github+json"               "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls?head=${TARGET_OWNER}:${SYNC_BRANCH}&state=open")
+            list=$(curl -sS \
+              -H "Authorization: token ${{ secrets.SCANNER_PAT }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls?head=${TARGET_OWNER}:${SYNC_BRANCH}&state=open")
+
             existing=$(echo "$list" | jq -r '.[0].html_url // empty')
             if [ -n "$existing" ]; then
               echo "PR already exists: $existing"
@@ -90,3 +104,4 @@ jobs:
               echo "No PR created or found."
             fi
           fi
+
