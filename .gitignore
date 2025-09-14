@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+*.log
+
+# --- Virtualenv / venv ---
+.venv/
+env/
+venv/
+ENV/
+*.env
+*.venv
+
+# --- OS spécifiques ---
+.DS_Store
+Thumbs.db
+
+# --- IDE / Éditeurs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- PyInstaller / Build ---
+build/
+dist/
+*.spec
+
+# --- Tests ---
+.coverage
+htmlcov/
+.tox/
+pytest_cache/
+.mypy_cache/
+.pytest_cache/

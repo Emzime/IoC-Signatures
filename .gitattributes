@@ -1,0 +1,19 @@
+# Normaliser les fins de ligne en LF (Linux/macOS)
+* text=auto eol=lf
+
+# JSON → traité comme texte
+*.json text diff=json
+
+# Python → texte avec diff Python
+*.py text diff=python
+
+# YAML / YML (workflows GitHub)
+*.yml text diff=yaml
+*.yaml text diff=yaml
+
+# Markdown / Docs
+*.md text diff=markdown
+
+# Licence et README toujours LF
+LICENSE text eol=lf
+README.md text eol=lf

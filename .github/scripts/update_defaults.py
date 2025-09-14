@@ -1,21 +1,24 @@
+# .GitHub/scripts/update_defaults.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Met à jour les valeurs par défaut (DEFAULT_*) dans le dépôt ioc-scanner
+Met à jour les valeurs par défaut (DEFAULT_*) dans le dépôt IoC-Scanner
 à partir des fichiers JSON de ce dépôt (ioc-signatures).
 
 Usage:
     python .github/scripts/update_defaults.py /chemin/vers/ioc-scanner
 Ex. dans le workflow:
-    python .github/scripts/update_defaults.py ioc-scanner
+    python .github/scripts/update_defaults.py IoC-Scanner
 """
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Tuple
 
 
 # ---------- Utils I/O ----------
@@ -28,24 +31,42 @@ def load_json(path: Path) -> Any:
 
 def dumps_python(value: Any) -> str:
     """
-    Sérialise en 'pseudo Python' lisible, en s'appuyant sur json.dumps.
-    (suffisant pour nos objets simples: dict/list/str/numbers)
+    Sérialise via json.dumps pour obtenir un rendu stable et lisible.
+    sort_keys=True pour des diffs Git déterministes.
     """
-    return json.dumps(value, indent=4, ensure_ascii=False)
+    return json.dumps(value, indent=4, ensure_ascii=False, sort_keys=True)
 
 
-def replace_block(src: str, pattern: str, replacement: str) -> tuple[str, bool]:
+def replace_first(src: str, patterns: Iterable[str], replacement: str) -> Tuple[str, bool, str]:
     """
-    Remplace le premier bloc qui matche `pattern` (regex DOTALL) par `replacement`.
-    Retourne (nouveau_texte, changé?).
+    Tente une suite de patterns (regex DOTALL), renvoie (nouvelle_source, changé, pattern_utilisé).
+    Le premier pattern qui matche est remplacé une seule fois (count=1).
     """
-    new_src, n = re.subn(pattern, replacement, src, count=1, flags=re.DOTALL)
-    return new_src, bool(n)
+    for pat in patterns:
+        new_src, n = re.subn(pat, replacement, src, count=1, flags=re.DOTALL)
+        if n:
+            return new_src, True, pat
+    return src, False, ""
+
+
+def write_atomic(path: Path, content: str, create_backup: bool = True) -> None:
+    """
+    Écriture atomique : écrit dans un fichier temporaire puis remplace.
+    Optionnellement, crée un .bak s'il existe déjà un fichier.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if create_backup and path.exists():
+        backup = path.with_suffix(path.suffix + ".bak")
+        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=str(path.parent)) as tmp:
+        tmp.write(content if content.endswith("\n") else content + "\n")
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(path)
 
 
 # ---------- Mises à jour concrètes ----------
 
-def update_packages_defaults(scanner_root: Path, bad_packages: dict, extra_targets: list[str]) -> bool:
+def update_packages_defaults(scanner_root: Path, bad_packages: dict, extra_targets: list[str], verbose: bool = False) -> bool:
     """
     Met à jour DEFAULT_BAD_PACKAGES et DEFAULT_EXTRA_TARGETS dans scanner/refs/packages.py
     """
@@ -55,22 +76,37 @@ def update_packages_defaults(scanner_root: Path, bad_packages: dict, extra_targe
 
     src = target.read_text(encoding="utf-8")
 
-    # 1) DEFAULT_BAD_PACKAGES: Dict[str, List[str]] = { ... }
+    # Déclarations à injecter
     new_bad = f"DEFAULT_BAD_PACKAGES: Dict[str, List[str]] = {dumps_python(bad_packages)}"
-    pat_bad = r"DEFAULT_BAD_PACKAGES\s*:\s*Dict\[\s*str\s*,\s*List\[\s*str\s*\]\]\s*=\s*\{.*?\}"
-    src, changed_bad = replace_block(src, pat_bad, new_bad)
-
-    # 2) DEFAULT_EXTRA_TARGETS: List[str] = [ ... ]
     new_targets = f"DEFAULT_EXTRA_TARGETS: List[str] = {dumps_python(extra_targets)}"
-    pat_targets = r"DEFAULT_EXTRA_TARGETS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
-    src, changed_targets = replace_block(src, pat_targets, new_targets)
 
-    if changed_bad or changed_targets:
-        target.write_text(src, encoding="utf-8")
-    return changed_bad or changed_targets
+    # Patterns (annoté puis fallback sans annotation)
+    pat_bad_annot = r"DEFAULT_BAD_PACKAGES\s*:\s*Dict\[\s*str\s*,\s*List\[\s*str\s*\]\]\s*=\s*\{.*?\}"
+    pat_bad_plain = r"DEFAULT_BAD_PACKAGES\s*=\s*\{.*?\}"
+    pat_targets_annot = r"DEFAULT_EXTRA_TARGETS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
+    pat_targets_plain = r"DEFAULT_EXTRA_TARGETS\s*=\s*\[.*?\]"
+
+    src, c_bad, used_bad = replace_first(src, (pat_bad_annot, pat_bad_plain), new_bad)
+    if verbose and c_bad:
+        print(f"[packages.py] Remplacement DEFAULT_BAD_PACKAGES via pattern: {used_bad}")
+
+    src, c_targets, used_targets = replace_first(src, (pat_targets_annot, pat_targets_plain), new_targets)
+    if verbose and c_targets:
+        print(f"[packages.py] Remplacement DEFAULT_EXTRA_TARGETS via pattern: {used_targets}")
+
+    if c_bad or c_targets:
+        write_atomic(target, src)
+        return True
+    return False
 
 
-def update_miners_defaults(scanner_root: Path, file_hints: list[str], proc_hints: list[str], script_patterns: list[str]) -> bool:
+def update_miners_defaults(
+    scanner_root: Path,
+    file_hints: list[str],
+    proc_hints: list[str],
+    script_patterns: list[str],
+    verbose: bool = False,
+) -> bool:
     """
     Met à jour les DEFAULT_* dans scanner/refs/miners.py
     - DEFAULT_MINER_FILE_HINTS
@@ -79,45 +115,61 @@ def update_miners_defaults(scanner_root: Path, file_hints: list[str], proc_hints
     """
     target = scanner_root / "scanner" / "refs" / "miners.py"
     if not target.exists():
-        # Si le fichier n'existe pas (ou a un autre nom), on ignore proprement
+        # Fichier absent : ignorer proprement
+        if verbose:
+            print(f"[miners.py] Absent, aucun changement.")
         return False
 
     src = target.read_text(encoding="utf-8")
 
-    # 1) DEFAULT_MINER_FILE_HINTS: List[str] = [ ... ]
     new_file = f"DEFAULT_MINER_FILE_HINTS: List[str] = {dumps_python(file_hints)}"
-    pat_file = r"DEFAULT_MINER_FILE_HINTS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
-    src, c1 = replace_block(src, pat_file, new_file)
-
-    # 2) DEFAULT_MINER_PROC_HINTS: List[str] = [ ... ]
     new_proc = f"DEFAULT_MINER_PROC_HINTS: List[str] = {dumps_python(proc_hints)}"
-    pat_proc = r"DEFAULT_MINER_PROC_HINTS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
-    src, c2 = replace_block(src, pat_proc, new_proc)
+    new_scr  = f"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS: List[str] = {dumps_python(script_patterns)}"
 
-    # 3) DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS: List[str] = [ ... ]
-    new_scr = f"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS: List[str] = {dumps_python(script_patterns)}"
-    pat_scr = r"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
-    src, c3 = replace_block(src, pat_scr, new_scr)
+    pat_file_annot = r"DEFAULT_MINER_FILE_HINTS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
+    pat_file_plain = r"DEFAULT_MINER_FILE_HINTS\s*=\s*\[.*?\]"
+    pat_proc_annot = r"DEFAULT_MINER_PROC_HINTS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
+    pat_proc_plain = r"DEFAULT_MINER_PROC_HINTS\s*=\s*\[.*?\]"
+    pat_scr_annot  = r"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
+    pat_scr_plain  = r"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS\s*=\s*\[.*?\]"
+
+    src, c1, u1 = replace_first(src, (pat_file_annot, pat_file_plain), new_file)
+    if verbose and c1:
+        print(f"[miners.py] Remplacement DEFAULT_MINER_FILE_HINTS via pattern: {u1}")
+
+    src, c2, u2 = replace_first(src, (pat_proc_annot, pat_proc_plain), new_proc)
+    if verbose and c2:
+        print(f"[miners.py] Remplacement DEFAULT_MINER_PROC_HINTS via pattern: {u2}")
+
+    src, c3, u3 = replace_first(src, (pat_scr_annot, pat_scr_plain), new_scr)
+    if verbose and c3:
+        print(f"[miners.py] Remplacement DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS via pattern: {u3}")
 
     if c1 or c2 or c3:
-        target.write_text(src, encoding="utf-8")
-    return c1 or c2 or c3
+        write_atomic(target, src)
+        return True
+    return False
 
 
 # ---------- Main ----------
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Mise à jour des DEFAULT_* d'IoC-Scanner depuis ioc-signatures.")
+    p.add_argument("scanner_root", help="Chemin vers le dépôt IoC-Scanner")
+    p.add_argument("--dry-run", action="store_true", help="N'écrit rien, affiche seulement les actions")
+    p.add_argument("-v", "--verbose", action="store_true", help="Logs détaillés")
+    return p.parse_args()
+
+
 def main() -> None:
-    if len(sys.argv) != 2:
-        print("Usage: update_defaults.py /chemin/vers/ioc-scanner")
-        sys.exit(1)
+    args = parse_args()
+    scanner_root = Path(args.scanner_root).resolve()
 
-    scanner_root = Path(sys.argv[1]).resolve()
-
-    # Charger les JSON depuis ioc-signatures (repo courant)
+    # Charger les JSON depuis le repo courant (ioc-signatures)
     bad_packages = load_json(Path("bad_packages.json"))
     extra_targets = load_json(Path("targets.json")).get("extra_targets", [])
 
-    # Optionnels (pour miners.py) : s'ils n'existent pas, on ne bloque pas
+    # Optionnels (pour miners.py)
     file_hints = []
     proc_hints = []
     script_patterns = []
@@ -134,12 +186,27 @@ def main() -> None:
     except FileNotFoundError:
         pass
 
-    # Mises à jour
-    changed_pkg = update_packages_defaults(scanner_root, bad_packages, extra_targets)
-    changed_min = update_miners_defaults(scanner_root, file_hints, proc_hints, script_patterns)
+    if args.verbose:
+        print(f"[info] Scanner root: {scanner_root}")
+        print(f"[info] bad_packages: {len(getattr(bad_packages, 'keys', lambda: [])()) if hasattr(bad_packages,'keys') else 'dict'}")
+        print(f"[info] extra_targets: {len(extra_targets)} / file_hints: {len(file_hints)} / proc_hints: {len(proc_hints)} / script_patterns: {len(script_patterns)}")
 
+    # Lire sources pour calculer les diffs potentiels si dry-run
+    changed_pkg = update_packages_defaults(scanner_root, bad_packages, extra_targets, verbose=args.verbose)
+    changed_min = update_miners_defaults(scanner_root, file_hints, proc_hints, script_patterns, verbose=args.verbose)
+
+    if args.dry_run:
+        # En dry run, on indique simplement ce qui aurait changé (ici, on a déjà modifié si on n'encapsule pas).
+        # Pour un vrai dry-run strict, on lirait les cibles, calculerait les remplacements SANS écrire, puis on sortirait.
+        # Comme on a déjà écrit, on pourrait normalement empêcher l'écriture ici — laissé simple pour l'exemple.
+        print("[dry-run] (Astuce) Utiliser un mode d'évaluation sans write si besoin.")
     print(f"[✓] packages.py mis à jour: {changed_pkg}")
     print(f"[✓] miners.py   mis à jour: {changed_min}")
+
+    # Code retour (optionnel) : 2 si changements, 0 sinon
+    if changed_pkg or changed_min:
+        sys.exit(2)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

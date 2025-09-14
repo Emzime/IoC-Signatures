@@ -10,6 +10,7 @@
     "phoenixminer(\\.exe)?$",
     "astrominer(\\.exe)?$",
     "cpuminer(\\.exe)?$",
-    "minerd(\\.exe)?$"
+    "minerd(\\.exe)?$",
+    "claymore(\\.exe)?$"
   ]
 }
