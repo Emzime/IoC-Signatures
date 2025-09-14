@@ -1,0 +1,15 @@
+{
+  "patterns": [
+    "xmrig(\\.exe)?$",
+    "lolminer(\\.exe)?$",
+    "nbminer(\\.exe)?$",
+    "ethminer(\\.exe)?$",
+    "teamredminer(\\.exe)?$",
+    "t-rex(\\.exe)?$",
+    "gminer(\\.exe)?$",
+    "phoenixminer(\\.exe)?$",
+    "astrominer(\\.exe)?$",
+    "cpuminer(\\.exe)?$",
+    "minerd(\\.exe)?$"
+  ]
+}

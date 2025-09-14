@@ -1,0 +1,24 @@
+{
+  "extra_targets": [
+    "supports-color",
+    "ansi-styles",
+    "ansi-regex",
+    "wrap-ansi",
+    "slice-ansi",
+    "chalk-template",
+    "supports-hyperlinks",
+    "color-name",
+    "color-string",
+    "color-convert",
+    "is-arrayish",
+    "error-ex",
+    "simple-swizzle",
+    "backslash",
+    "chalk",
+    "debug",
+    "duckdb",
+    "@duckdb/node-api",
+    "@duckdb/node-bindings",
+    "@duckdb/duckdb-wasm"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "patterns": [
+    "\\bxmrig\\b",
+    "\\blolminer\\b",
+    "\\bnbminer\\b",
+    "\\bethminer\\b",
+    "\\bteamredminer\\b",
+    "\\bt-rex\\b",
+    "\\bgminer\\b",
+    "\\bphoenixminer\\b",
+    "\\bastrominer\\b",
+    "\\bcpuminer\\b",
+    "\\bminerd\\b"
+  ]
+}

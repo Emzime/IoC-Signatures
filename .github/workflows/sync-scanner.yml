@@ -1,0 +1,68 @@
+name: Sync signatures to IoC-Scanner
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  update-scanner:
+    runs-on: ubuntu-latest
+
+    env:
+      TARGET_OWNER: Emzime               # ← modifie si besoin
+      TARGET_REPO: IoC-Scanner           # ← modifie si besoin
+      TARGET_DEFAULT_BRANCH: main        # ← modifie si besoin
+      SYNC_BRANCH: update-defaults
+
+    steps:
+      - name: Checkout IoC-Signatures
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Clone IoC-Scanner (target)
+        run: |
+          git clone "https://x-access-token:${{ secrets.SCANNER_PAT }}@github.com/${TARGET_OWNER}/${TARGET_REPO}.git"
+          ls -la "${TARGET_REPO}"
+
+      - name: Run update_defaults.py (mise à jour des DEFAULT_*)
+        run: |
+          python .github/scripts/update_defaults.py "${TARGET_REPO}"
+
+      - name: Commit changes (if any)
+        run: |
+          cd "${TARGET_REPO}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # crée/écrase la branche de sync
+          git checkout -B "${SYNC_BRANCH}"
+          # ajoute les fichiers susceptibles d'être modifiés par le script
+          git add scanner/refs/packages.py scanner/refs/miners.py || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            echo "NO_CHANGES=1" >> $GITHUB_ENV
+          else
+            git commit -m "chore: update DEFAULT_* from IoC-Signatures"
+            git push -f "https://x-access-token:${{ secrets.SCANNER_PAT }}@github.com/${TARGET_OWNER}/${TARGET_REPO}.git" "${SYNC_BRANCH}"
+          fi
+
+      - name: Create Pull Request via GitHub API
+        if: env.NO_CHANGES != '1'
+        run: |
+          # Crée la PR (ignore l'erreur si elle existe déjà)
+          create_payload=$(jq -n \
+            --arg title  "Update DEFAULT_* signatures" \
+            --arg head   "${SYNC_BRANCH}" \
+            --arg base   "${TARGET_DEFAULT_BRANCH}" \
+            --arg body   "Mise à jour automatique des valeurs par défaut depuis IoC-Signatures." \
+            '{title:$title, head:$head, base:$base, body:$body, maintainer_can_modify:true, draft:false}')
+          curl -sS -X POST \
+            -H "Authorization: token ${{ secrets.SCANNER_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$create_payload" \
+            "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/pulls" \
+            | jq -r '.html_url // "PR already exists or created."'
