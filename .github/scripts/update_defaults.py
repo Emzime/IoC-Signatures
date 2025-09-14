@@ -38,6 +38,24 @@ def dumps_python(value: Any) -> str:
     return json.dumps(value, indent=4, ensure_ascii=False, sort_keys=True)
 
 
+def dumps_raw_list(items: list[str]) -> str:
+    """
+    Sérialise une liste[str] en littéraux Python raw (r"...") pour préserver les
+    backslashes des regex (\\b, \\s, etc.). Si un élément contient à la fois
+    ' et " OU se termine par un backslash, on retombe sur json.dumps.
+    """
+    out: list[str] = []
+    for s in items:
+        if not isinstance(s, str):
+            continue
+        if s.endswith("\\") or ('"' in s and "'" in s):
+            out.append(json.dumps(s, ensure_ascii=False))
+            continue
+        quote = "'" if '"' in s else '"'
+        out.append(f"r{quote}{s}{quote}")
+    return "[\n    " + ",\n    ".join(out) + "\n]"
+
+
 def replace_first(src: str, patterns: Iterable[str], replacement: str) -> Tuple[str, bool, str]:
     """
     Tente une suite de patterns (regex DOTALL), renvoie (nouvelle_source, changé, pattern_utilisé).
@@ -137,10 +155,10 @@ def update_miners_defaults(
 
     src = target.read_text(encoding="utf-8")
 
-    # Payloads
-    new_file = f"DEFAULT_MINER_FILE_HINTS: List[str] = {dumps_python(file_hints)}"
-    new_proc = f"DEFAULT_MINER_PROC_HINTS: List[str] = {dumps_python(proc_hints)}"
-    new_scr  = f"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS: List[str] = {dumps_python(script_patterns)}"
+    # Payloads (miners en littéraux r"...")
+    new_file = f"DEFAULT_MINER_FILE_HINTS: List[str] = {dumps_raw_list(file_hints)}"
+    new_proc = f"DEFAULT_MINER_PROC_HINTS: List[str] = {dumps_raw_list(proc_hints)}"
+    new_scr  = f"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS: List[str] = {dumps_raw_list(script_patterns)}"
 
     # Marqueurs attendus dans miners.py
     m_file_begin = "# BEGIN DEFAULT_MINER_FILE_HINTS (AUTO)"
