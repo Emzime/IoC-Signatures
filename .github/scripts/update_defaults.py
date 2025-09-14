@@ -1,4 +1,3 @@
-# .GitHub/scripts/update_defaults.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -33,6 +32,7 @@ def dumps_python(value: Any) -> str:
     """
     Sérialise via json.dumps pour obtenir un rendu stable et lisible.
     sort_keys=True pour des diffs Git déterministes.
+    (Les chaînes JSON sont aussi valides en littéraux Python.)
     """
     return json.dumps(value, indent=4, ensure_ascii=False, sort_keys=True)
 
@@ -47,6 +47,20 @@ def replace_first(src: str, patterns: Iterable[str], replacement: str) -> Tuple[
         if n:
             return new_src, True, pat
     return src, False, ""
+
+
+def replace_between_marks(src: str, begin: str, end: str, payload: str) -> Tuple[str, bool]:
+    """
+    Remplace le contenu entre deux marqueurs *sur une seule occurrence*.
+    Les marqueurs eux-mêmes sont conservés.
+    """
+    pattern = re.compile(
+        rf"({re.escape(begin)})(.*?)[ \t]*({re.escape(end)})",
+        re.DOTALL
+    )
+    replacement = r"\1" + payload + r"\3"
+    new_src, n = pattern.subn(replacement, src, count=1)
+    return new_src, bool(n)
 
 
 def write_atomic(path: Path, content: str, create_backup: bool = True) -> None:
@@ -69,6 +83,7 @@ def write_atomic(path: Path, content: str, create_backup: bool = True) -> None:
 def update_packages_defaults(scanner_root: Path, bad_packages: dict, extra_targets: list[str], verbose: bool = False) -> bool:
     """
     Met à jour DEFAULT_BAD_PACKAGES et DEFAULT_EXTRA_TARGETS dans scanner/refs/packages.py
+    (Regex OK ici car pas de crochets ']' dans des chaînes.)
     """
     target = scanner_root / "scanner" / "refs" / "packages.py"
     if not target.exists():
@@ -112,19 +127,44 @@ def update_miners_defaults(
     - DEFAULT_MINER_FILE_HINTS
     - DEFAULT_MINER_PROC_HINTS
     - DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS
+
+    ⚠️ D'abord via MARQUEURS (plus sûr), sinon fallback regex.
     """
     target = scanner_root / "scanner" / "refs" / "miners.py"
     if not target.exists():
-        # Fichier absent : ignorer proprement
         if verbose:
             print(f"[miners.py] Absent, aucun changement.")
         return False
 
     src = target.read_text(encoding="utf-8")
 
+    # Payloads
     new_file = f"DEFAULT_MINER_FILE_HINTS: List[str] = {dumps_python(file_hints)}"
     new_proc = f"DEFAULT_MINER_PROC_HINTS: List[str] = {dumps_python(proc_hints)}"
     new_scr  = f"DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS: List[str] = {dumps_python(script_patterns)}"
+
+    # Marqueurs attendus dans miners.py
+    m_file_begin = "# BEGIN DEFAULT_MINER_FILE_HINTS (AUTO)"
+    m_file_end   = "# END DEFAULT_MINER_FILE_HINTS (AUTO)"
+    m_proc_begin = "# BEGIN DEFAULT_MINER_PROC_HINTS (AUTO)"
+    m_proc_end   = "# END DEFAULT_MINER_PROC_HINTS (AUTO)"
+    m_scr_begin  = "# BEGIN DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS (AUTO)"
+    m_scr_end    = "# END DEFAULT_SUSPICIOUS_SCRIPT_PATTERNS (AUTO)"
+
+    # 1) Tentative par marqueurs
+    src2, c1 = replace_between_marks(src, m_file_begin, m_file_end, new_file)
+    src3, c2 = replace_between_marks(src2, m_proc_begin, m_proc_end, new_proc)
+    src4, c3 = replace_between_marks(src3, m_scr_begin, m_scr_end, new_scr)
+
+    if c1 or c2 or c3:
+        if verbose:
+            print(f"[miners.py] Remplacement via MARQUEURS: file={c1}, proc={c2}, scr={c3}")
+        write_atomic(target, src4)
+        return True
+
+    # 2) Fallback regex si pas de marqueurs
+    if verbose:
+        print("[miners.py] Marqueurs absents → fallback regex (moins sûr).")
 
     pat_file_annot = r"DEFAULT_MINER_FILE_HINTS\s*:\s*List\[\s*str\s*\]\s*=\s*\[.*?\]"
     pat_file_plain = r"DEFAULT_MINER_FILE_HINTS\s*=\s*\[.*?\]"
@@ -170,40 +210,35 @@ def main() -> None:
     extra_targets = load_json(Path("targets.json")).get("extra_targets", [])
 
     # Optionnels (pour miners.py)
-    file_hints = []
-    proc_hints = []
-    script_patterns = []
     try:
         file_hints = load_json(Path("miner_file_hints.json")).get("patterns", [])
     except FileNotFoundError:
-        pass
+        file_hints = []
     try:
         proc_hints = load_json(Path("miner_proc_hints.json")).get("patterns", [])
     except FileNotFoundError:
-        pass
+        proc_hints = []
     try:
         script_patterns = load_json(Path("suspicious_patterns.json")).get("patterns", [])
     except FileNotFoundError:
-        pass
+        script_patterns = []
 
     if args.verbose:
+        bp_len = len(bad_packages) if isinstance(bad_packages, dict) else "n/a"
         print(f"[info] Scanner root: {scanner_root}")
-        print(f"[info] bad_packages: {len(getattr(bad_packages, 'keys', lambda: [])()) if hasattr(bad_packages,'keys') else 'dict'}")
-        print(f"[info] extra_targets: {len(extra_targets)} / file_hints: {len(file_hints)} / proc_hints: {len(proc_hints)} / script_patterns: {len(script_patterns)}")
+        print(f"[info] bad_packages: {bp_len} / extra_targets: {len(extra_targets)} / "
+              f"file_hints: {len(file_hints)} / proc_hints: {len(proc_hints)} / script_patterns: {len(script_patterns)}")
 
-    # Lire sources pour calculer les diffs potentiels si dry-run
     changed_pkg = update_packages_defaults(scanner_root, bad_packages, extra_targets, verbose=args.verbose)
     changed_min = update_miners_defaults(scanner_root, file_hints, proc_hints, script_patterns, verbose=args.verbose)
 
     if args.dry_run:
-        # En dry run, on indique simplement ce qui aurait changé (ici, on a déjà modifié si on n'encapsule pas).
-        # Pour un vrai dry-run strict, on lirait les cibles, calculerait les remplacements SANS écrire, puis on sortirait.
-        # Comme on a déjà écrit, on pourrait normalement empêcher l'écriture ici — laissé simple pour l'exemple.
-        print("[dry-run] (Astuce) Utiliser un mode d'évaluation sans write si besoin.")
+        print("[dry-run] Exécution en mode dry-run terminée.")
+
     print(f"[✓] packages.py mis à jour: {changed_pkg}")
     print(f"[✓] miners.py   mis à jour: {changed_min}")
 
-    # Code retour (optionnel) : 2 si changements, 0 sinon
+    # Code retour : 2 si changements, 0 sinon (ton workflow sait gérer 2)
     if changed_pkg or changed_min:
         sys.exit(2)
     sys.exit(0)
